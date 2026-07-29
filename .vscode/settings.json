@@ -1,0 +1,9 @@
+{
+    "python.analysis.typeCheckingMode": "standard",
+    "editor.formatOnSave": true,
+    "autoDocstring.startOnNewLine": true,
+    "black-formatter.args": [
+        "--line-length=140"
+    ],
+    "pylint.enabled": false,
+}

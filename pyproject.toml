@@ -1,0 +1,14 @@
+[project]
+name = "sure-tools-workspace-root"
+version = "0.1.0"
+description = "Root workspace orchestration"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[tool.uv]
+managed = true
+
+[tool.uv.workspace]
+# Discovers all packages inside the apps/ and libs/ subdirectories
+members = ["apps/*", "libs/*"]

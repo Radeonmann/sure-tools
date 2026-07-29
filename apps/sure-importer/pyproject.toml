@@ -1,0 +1,31 @@
+[project]
+name = "sure-importer"
+version = "0.1.0"
+description = "Automated CAMT.053 file importer for self-hosted sure.am"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "watchfiles>=1.0.0",
+    "requests>=2.31.0",
+    "sure-api-client>=0.7.2",
+    "camt-parser>=0.1.0",
+]
+
+[tool.uv.sources]
+# Instructs uv to fetch this dependency from the local workspace instead of PyPI
+sure-api-client = { workspace = true }
+camt-parser = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.11.0,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "sure_importer"
+module-root = ""
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["F", "I", "UP"]

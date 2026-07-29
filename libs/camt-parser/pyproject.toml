@@ -1,0 +1,29 @@
+[project]
+name = "camt-parser"
+version = "0.1.0.dev0"
+description = "A parser library for CAMT files"
+authors = []
+requires-python = ">=3.12,<3.13"
+readme = "README.md"
+dependencies = [
+    "lxml>=6.1.1",
+]
+
+[tool.uv.build-backend]
+module-name = "camt_parser"
+module-root = ""
+
+[build-system]
+requires = ["uv_build>=0.11.0,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "lxml-stubs>=0.5.1",
+]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["F", "I", "UP"]
