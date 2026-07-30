@@ -111,7 +111,7 @@ class TransactionInfo(TypedDict):
 
     # Financial Details - Account / Ledger (Always present, always in Account Currency)
     Amount: Decimal
-    """The final settled amount applied to the ledger."""
+    """The final settled amount applied to the ledger. Is always positive or zero."""
     Currency: str
     """The currency of the ledger account."""
     CreditDebitIndicator: Literal["CRDT", "DBIT"]
@@ -127,7 +127,7 @@ class TransactionInfo(TypedDict):
 
     # Secondary Foreign Financials (Only if a currency conversion happened)
     ForeignAmount: Decimal | None
-    """The original instructed invoice/wire amount before FX conversion."""
+    """The original instructed invoice/wire amount before FX conversion. Is always positive or zero."""
     ForeignCurrency: str | None
     """The original currency before FX conversion."""
     ExchangeRate: Decimal | None
@@ -716,11 +716,15 @@ def _get_amount_and_currency(amt_elem: ET._Element | None) -> tuple[Decimal, str
         raise ValueError(f"Element '{amt_elem.tag}' has an amount element with no text, which is invalid.")
     if not amt_ccy:
         raise ValueError(f"Element '{amt_elem.tag}' has no or empty currency attribute, which is invalid.")
-    # Convert amount and return
+    # Convert amount
     try:
         amt_decimal = Decimal(amt_text)
     except Exception as e:
         raise ValueError(f"Failed to convert amount '{amt_text}' to Decimal: {e}")
+    # check not negative (not allowed in CAMT.053)
+    if amt_decimal < Decimal("0"):
+        raise ValueError(f"Element '{amt_elem.tag}' has a negative amount '{amt_decimal}', which is invalid.")
+    # return
     return (amt_decimal, amt_ccy)
 
 
@@ -866,6 +870,11 @@ def _validate_amount_details(amt_details: _AmountDetails, settings: Camt053Parse
                 )
         except Exception as e:
             raise
+    # Validate that all amounts are positive (CAMT.053 does not allow negative amounts)
+    if ledger_amt is not None and ledger_amt < Decimal("0"):
+        raise ValueError(f"Ledger amount {ledger_amt} {ledger_ccy} is negative, which is invalid in CAMT.053.")
+    if foreign_amt is not None and foreign_amt < Decimal("0"):
+        raise ValueError(f"Foreign amount {foreign_amt} {foreign_ccy} is negative, which is invalid in CAMT.053.")
     # Optionally check for completeness: if any of the foreign amount, foreign currency, or exchange rate is present, all must be present.
     if not check_completeness:
         return

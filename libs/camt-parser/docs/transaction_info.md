@@ -30,7 +30,7 @@ The `Camt053Parser.get_transactions()` method returns a flat list of `Transactio
 
 ## Financial Details (Ledger)
 
-- **`Amount`**: The final settled amount applied to the ledger.
+- **`Amount`**: The final settled amount applied to the ledger. Is always positive or zero.
   - _Source:_ Fallback hierarchy matching the account currency: `<AmtDtls>/<CntrValAmt>/<Amt>` → `<Ntry>/<Amt>` → `<AmtDtls>/<TxAmt>/<Amt>` → `<AmtDtls>/<InstdAmt>/<Amt>`
 - **`Currency`**: The currency of the ledger account.
   - _Source:_ Sourced alongside `Amount` via the `Ccy` attribute.
@@ -47,7 +47,7 @@ The `Camt053Parser.get_transactions()` method returns a flat list of `Transactio
 
 _(Populated only if a currency conversion occurred)_
 
-- **`ForeignAmount` / `ForeignCurrency`**: The original instructed invoice/wire amount before FX conversion.
+- **`ForeignAmount` / `ForeignCurrency`**: The original instructed invoice/wire amount before FX conversion. Is always positive or zero.
   - _Source:_ The amount block whose `Ccy` attribute differs from the account currency (usually `<InstdAmt>` or `<TxAmt>`).
 - **`ExchangeRate`**: The applied conversion rate. The exchange rate is always using the convention `foreign * rate = account`.
   - _Source:_ Extracted from the `<CcyXchg>` block of the matched amount, or calculated mathematically if missing.
