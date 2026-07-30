@@ -1,17 +1,19 @@
 import copy
 import logging
 import pathlib
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import TypedDict, Literal
+from typing import Literal
 
 from lxml import etree as ET
 
 logger = logging.getLogger(__name__)
 
 
-class Camt053ParserSettings(TypedDict):
-    exchange_rate_result_tolerance: Decimal
+@dataclass(frozen=True)
+class Camt053ParserSettings:
+    exchange_rate_result_tolerance: Decimal = Decimal("0.006")
     """
     Absolute error tolerance of the exchange rate calculation to account for rounding errors in the amounts.
 
@@ -20,22 +22,22 @@ class Camt053ParserSettings(TypedDict):
     calculated_ledger = foreign_amt * xchg_rate
     absolute_error = abs(calculated_ledger - stated_ledger_amt)
     is_valid = absolute_error <= EXCHANGE_RATE_RESULT_TOLERANCE
+
+    Default is 0.006, which is slightly more than half a cent. This is usually sufficient to account for rounding errors in the amounts,
+    which are usually rounded to 2 decimal places. If the bank provides low resolution rates or amounts, this may need to
+    be increased to avoid false positives.
     """
 
 
-DEFAULT_PARSER_SETTINGS: Camt053ParserSettings = {
-    # usually statements set two digits after the decimal point, so 0.005 is the rounding error for 0.01
-    "exchange_rate_result_tolerance": Decimal("0.005"),
-}
-
-
-class XmlElementDict(TypedDict):
+@dataclass(frozen=True)
+class XmlElementDict:
     text: str | None
     attrib: dict[str, str]
     children: dict[str, list["XmlElementDict"]]
 
 
-class StatementInfo(TypedDict):
+@dataclass(frozen=True)
+class StatementInfo:
     StatementId: str | None
     LegalSequenceNumber: str | None
     ElectronicSequenceNumber: str | None
@@ -52,7 +54,8 @@ class StatementInfo(TypedDict):
     Advanced: XmlElementDict
 
 
-class EntryInfo(TypedDict):
+@dataclass(frozen=True)
+class EntryInfo:
     # Identifiers & References
     EntryReference: str | None
     AccountServicerReference: str | None
@@ -84,7 +87,8 @@ class EntryInfo(TypedDict):
     Advanced: XmlElementDict
 
 
-class TransactionInfo(TypedDict):
+@dataclass(frozen=True)
+class TransactionInfo:
     # Statement Context
     AccountIBAN: str | None
     """The IBAN of the ledger account."""
@@ -198,24 +202,28 @@ class TransactionInfo(TypedDict):
     """A namespace-stripped, whitespace-normalized JSON representation of the exact XML path for this specific transaction."""
 
 
-class _StatementData(TypedDict):
+@dataclass(frozen=True)
+class _StatementData:
     xml_element: ET._Element
     info: StatementInfo
 
 
-class _EntryData(TypedDict):
+@dataclass(frozen=True)
+class _EntryData:
     statement: _StatementData
     xml_element: ET._Element
     info: EntryInfo
 
 
-class _TransactionData(TypedDict):
+@dataclass(frozen=True)
+class _TransactionData:
     entry: _EntryData
     xml_element: ET._Element
     info: TransactionInfo
 
 
-class _AmountDetails(TypedDict):
+@dataclass(frozen=True)
+class _AmountDetails:
     Amount: Decimal | None
     Currency: str | None
     ForeignAmount: Decimal | None
@@ -223,7 +231,8 @@ class _AmountDetails(TypedDict):
     ExchangeRate: Decimal | None
 
 
-class CurrencyExchangeDetails(TypedDict):
+@dataclass(frozen=True)
+class _CurrencyExchangeDetails:
     SourceCurrency: str
     """Source currency of the exchange rate, e.g. 'EUR'."""
     TargetCurrency: str
@@ -239,7 +248,7 @@ class Camt053Parser:
     _nsmap: dict[str, str]
     _settings: Camt053ParserSettings
 
-    def __init__(self, xml_tree: ET._ElementTree, settings: Camt053ParserSettings = DEFAULT_PARSER_SETTINGS):
+    def __init__(self, xml_tree: ET._ElementTree, settings: Camt053ParserSettings = Camt053ParserSettings()):
         self._tree = xml_tree
         self._root = self._tree.getroot()
         self._root_namespace = _extract_ns(self._root.tag)
@@ -247,7 +256,7 @@ class Camt053Parser:
         self._settings = settings
 
     @staticmethod
-    def from_file(file_path: str | pathlib.PurePath, settings: Camt053ParserSettings = DEFAULT_PARSER_SETTINGS) -> "Camt053Parser":
+    def from_file(file_path: str | pathlib.PurePath, settings: Camt053ParserSettings = Camt053ParserSettings()) -> "Camt053Parser":
         """
         Factory method to create a Camt053Parser instance from a file path.
         """
@@ -279,29 +288,28 @@ class Camt053Parser:
             from_dt = _get_date_or_datetime_from_base_elem(from_to_dt_elem, ns, datetime_tag="FrDtTm", date_tag="FrDt")
             to_dt = _get_date_or_datetime_from_base_elem(from_to_dt_elem, ns, datetime_tag="ToDtTm", date_tag="ToDt")
             # build the StatementInfo dict
-            stmt_info: StatementInfo = {
-                "StatementId": statement_id,
-                "LegalSequenceNumber": _find_unique_elem_text(stmt_el, "./ns:LglSeqNb", ns),
-                "ElectronicSequenceNumber": _find_unique_elem_text(stmt_el, "./ns:ElctrncSeqNb", ns),
-                "StatementCreationDate": creation_dt,
-                "FromDateTime": from_dt,
-                "ToDateTime": to_dt,
-                "AccountIBAN": _find_unique_elem_text(stmt_el, "./ns:Acct/ns:Id/ns:IBAN", ns),
-                "AccountIdOther": _find_unique_elem_text(stmt_el, "./ns:Acct/ns:Id/ns:Othr/ns:Id", ns),
-                "AccountCurrency": account_ccy,
-                "AccountOwner": _find_unique_elem_text(stmt_el, "./ns:Acct/ns:Ownr/ns:Nm", ns, normalize=True),
-                "OpeningBalance": opening_amt,
-                "ClosingBalance": closing_amt,
-                # Advanced Raw XML Payload Includes whole tree, but stripped of all elements which are not descendants or ancestors
-                "Advanced": _elem_to_dict(stmt_el),
-            }
-            statements.append({"xml_element": stmt_el, "info": stmt_info})
+            stmt_info = StatementInfo(
+                StatementId=statement_id,
+                LegalSequenceNumber=_find_unique_elem_text(stmt_el, "./ns:LglSeqNb", ns),
+                ElectronicSequenceNumber=_find_unique_elem_text(stmt_el, "./ns:ElctrncSeqNb", ns),
+                StatementCreationDate=creation_dt,
+                FromDateTime=from_dt,
+                ToDateTime=to_dt,
+                AccountIBAN=_find_unique_elem_text(stmt_el, "./ns:Acct/ns:Id/ns:IBAN", ns),
+                AccountIdOther=_find_unique_elem_text(stmt_el, "./ns:Acct/ns:Id/ns:Othr/ns:Id", ns),
+                AccountCurrency=account_ccy,
+                AccountOwner=_find_unique_elem_text(stmt_el, "./ns:Acct/ns:Ownr/ns:Nm", ns, normalize=True),
+                OpeningBalance=opening_amt,
+                ClosingBalance=closing_amt,
+                Advanced=_elem_to_dict(stmt_el),
+            )
+            statements.append(_StatementData(xml_element=stmt_el, info=stmt_info))
         return statements
 
     def _get_entries_from_statement(self, statement_data: _StatementData) -> list[_EntryData]:
         ns = self._nsmap
-        statement_elem = statement_data["xml_element"]
-        statement = statement_data["info"]
+        statement_elem = statement_data.xml_element
+        statement = statement_data.info
         entries: list[_EntryData] = []
         for ntry_el in statement_elem.findall("./ns:Ntry", ns):
             # get IDs first for better logging and error messages
@@ -309,12 +317,12 @@ class Camt053Parser:
             account_servicer_reference = _find_unique_elem_text(ntry_el, "./ns:AcctSvcrRef", ns)
             entry_log_prefix = f"Entry '{account_servicer_reference or entry_reference or '<unknown>'}'"
             # amount and foreign amount handling
-            account_currency = statement["AccountCurrency"]
+            account_currency = statement.AccountCurrency
             amt_details = _get_amount_details_from_base_elem(ntry_el, account_currency, ns, self._settings)
-            if amt_details["Currency"] != account_currency:
-                log_currency = amt_details["Currency"] or amt_details["ForeignCurrency"] or "None"
+            if amt_details.Currency != account_currency:
+                log_currency = amt_details.Currency or amt_details.ForeignCurrency or "None"
                 raise ValueError(f"{entry_log_prefix}: Currency {log_currency} does not match the account currency {account_currency}.")
-            if not amt_details["Amount"] or not amt_details["Currency"]:
+            if not amt_details.Amount or not amt_details.Currency:
                 raise ValueError(f"{entry_log_prefix} does not have a valid amount or currency.")
             credit_debit_indicator = _find_unique_elem_text(ntry_el, "./ns:CdtDbtInd", ns)
             if not credit_debit_indicator in ("CRDT", "DBIT"):
@@ -333,38 +341,38 @@ class Camt053Parser:
             chrgs_amt, chrgs_ccy = _get_amount_and_currency(charges_elem)
             # Build XML tree dict -> overwrite Ntry list with only this
             entry_xml_dict = _elem_to_dict(ntry_el)
-            statement_xml_dict = copy.deepcopy(statement["Advanced"])
-            statement_xml_dict["children"]["Ntry"] = [entry_xml_dict]
+            statement_xml_dict = copy.deepcopy(statement.Advanced)
+            statement_xml_dict.children["Ntry"] = [entry_xml_dict]
             # build the EntryInfo dict
-            entry_info: EntryInfo = {
+            entry_info = EntryInfo(
                 # Identifiers & References
-                "EntryReference": entry_reference,
-                "AccountServicerReference": account_servicer_reference,
+                EntryReference=entry_reference,
+                AccountServicerReference=account_servicer_reference,
                 # Financial Details - Account / Ledger (always in Account Currency)
-                "Amount": amt_details["Amount"],
-                "Currency": amt_details["Currency"],
-                "CreditDebitIndicator": credit_debit_indicator,
-                "BookingDate": booking_date,
-                "ValueDate": value_date,
-                "ChargesAmount": chrgs_amt,
-                "ChargesCurrency": chrgs_ccy,
+                Amount=amt_details.Amount,
+                Currency=amt_details.Currency,
+                CreditDebitIndicator=credit_debit_indicator,
+                BookingDate=booking_date,
+                ValueDate=value_date,
+                ChargesAmount=chrgs_amt,
+                ChargesCurrency=chrgs_ccy,
                 # Secondary Foreign Financials (Only if a currency conversion happened)
-                "ForeignAmount": amt_details["ForeignAmount"],
-                "ForeignCurrency": amt_details["ForeignCurrency"],
-                "ExchangeRate": amt_details["ExchangeRate"],
+                ForeignAmount=amt_details.ForeignAmount,
+                ForeignCurrency=amt_details.ForeignCurrency,
+                ExchangeRate=amt_details.ExchangeRate,
                 # other metadata
-                "Status": _find_unique_elem_text(ntry_el, "./ns:Sts", ns),
-                "ReversalIndicator": reversal_indicator,
-                "AdditionalEntryInfo": _find_unique_elem_text(ntry_el, "./ns:AddtlNtryInf", ns, normalize=True),
-                "DomainCode": _find_unique_elem_text(ntry_el, "./ns:BkTxCd/ns:Domn/ns:Cd", ns),
-                "TransactionFamilyCode": _find_unique_elem_text(ntry_el, "./ns:BkTxCd/ns:Domn/ns:Fmly/ns:Cd", ns),
-                "TransactionSubFamilyCode": _find_unique_elem_text(ntry_el, "./ns:BkTxCd/ns:Domn/ns:Fmly/ns:SubFmlyCd", ns),
-                "CardPoiId": _find_unique_elem_text(ntry_el, "./ns:CardTx/ns:POI/ns:Id/ns:Id", ns),
-                "CardPan": _find_unique_elem_text(ntry_el, "./ns:CardTx/ns:Card/ns:PlainCardData/ns:PAN", ns),
+                Status=_find_unique_elem_text(ntry_el, "./ns:Sts", ns),
+                ReversalIndicator=reversal_indicator,
+                AdditionalEntryInfo=_find_unique_elem_text(ntry_el, "./ns:AddtlNtryInf", ns, normalize=True),
+                DomainCode=_find_unique_elem_text(ntry_el, "./ns:BkTxCd/ns:Domn/ns:Cd", ns),
+                TransactionFamilyCode=_find_unique_elem_text(ntry_el, "./ns:BkTxCd/ns:Domn/ns:Fmly/ns:Cd", ns),
+                TransactionSubFamilyCode=_find_unique_elem_text(ntry_el, "./ns:BkTxCd/ns:Domn/ns:Fmly/ns:SubFmlyCd", ns),
+                CardPoiId=_find_unique_elem_text(ntry_el, "./ns:CardTx/ns:POI/ns:Id/ns:Id", ns),
+                CardPan=_find_unique_elem_text(ntry_el, "./ns:CardTx/ns:Card/ns:PlainCardData/ns:PAN", ns),
                 # Advanced Raw XML Payload Includes whole tree, but stripped of all elements which are not descendants or ancestors
-                "Advanced": statement_xml_dict,
-            }
-            entries.append({"statement": statement_data, "xml_element": ntry_el, "info": entry_info})
+                Advanced=statement_xml_dict,
+            )
+            entries.append(_EntryData(statement=statement_data, xml_element=ntry_el, info=entry_info))
         return entries
 
     def _get_entries_from_statements(self, statements: list[_StatementData]) -> list[_EntryData]:
@@ -378,78 +386,78 @@ class Camt053Parser:
         Build transaction info directly from the entry when no TxDtls are present.
         This is used for simple entries that do not have individual transaction details.
         """
-        entry = entry_data["info"]
-        statement = entry_data["statement"]["info"]
-        tx_info: TransactionInfo = {
+        entry = entry_data.info
+        statement = entry_data.statement.info
+        tx_info = TransactionInfo(
             # Statement Context
-            "AccountIBAN": statement["AccountIBAN"],
-            "StatementId": statement["StatementId"],
+            AccountIBAN=statement.AccountIBAN,
+            StatementId=statement.StatementId,
             # Identifiers & References
-            "EntryAccountServicerReference": entry["AccountServicerReference"],
-            "TransactionAccountServicerReference": None,
-            "EntryReference": entry["EntryReference"],
-            "PaymentInformationId": None,
-            "ClearingSystemReference": None,
-            "EndToEndId": None,
-            "InstructionId": None,
-            "MandateId": None,
+            EntryAccountServicerReference=entry.AccountServicerReference,
+            TransactionAccountServicerReference=None,
+            EntryReference=entry.EntryReference,
+            PaymentInformationId=None,
+            ClearingSystemReference=None,
+            EndToEndId=None,
+            InstructionId=None,
+            MandateId=None,
             # Financial Details - Account / Ledger (Always present, always in Account Currency)
-            "Amount": entry["Amount"],
-            "Currency": entry["Currency"],
-            "CreditDebitIndicator": entry["CreditDebitIndicator"],
-            "BookingDate": entry["BookingDate"],
-            "ValueDate": entry["ValueDate"],
-            "ChargesAmount": entry["ChargesAmount"],
-            "ChargesCurrency": entry["ChargesCurrency"],
+            Amount=entry.Amount,
+            Currency=entry.Currency,
+            CreditDebitIndicator=entry.CreditDebitIndicator,
+            BookingDate=entry.BookingDate,
+            ValueDate=entry.ValueDate,
+            ChargesAmount=entry.ChargesAmount,
+            ChargesCurrency=entry.ChargesCurrency,
             # Financial Details - Foreign / Instructed (Only populated when foreign currency is involved)
-            "ForeignAmount": entry["ForeignAmount"],
-            "ForeignCurrency": entry["ForeignCurrency"],
-            "ExchangeRate": entry["ExchangeRate"],
+            ForeignAmount=entry.ForeignAmount,
+            ForeignCurrency=entry.ForeignCurrency,
+            ExchangeRate=entry.ExchangeRate,
             # Parties & Channels
-            "CreditorName": None,
-            "CreditorAccountIBAN": None,
-            "CreditorAccountIdOther": None,
-            "UltimateCreditorName": None,
-            "DebtorName": None,
-            "DebtorAccountIBAN": None,
-            "DebtorAccountIdOther": None,
-            "UltimateDebtorName": None,
-            "CardPoiId": entry["CardPoiId"],
-            "CardPan": entry["CardPan"],
+            CreditorName=None,
+            CreditorAccountIBAN=None,
+            CreditorAccountIdOther=None,
+            UltimateCreditorName=None,
+            DebtorName=None,
+            DebtorAccountIBAN=None,
+            DebtorAccountIdOther=None,
+            UltimateDebtorName=None,
+            CardPoiId=entry.CardPoiId,
+            CardPan=entry.CardPan,
             # ISO & Proprietary Codes
-            "DomainCode": entry["DomainCode"],
-            "TransactionFamilyCode": entry["TransactionFamilyCode"],
-            "TransactionSubFamilyCode": entry["TransactionSubFamilyCode"],
-            "ProprietaryTransactionCode": None,
-            "ReturnReasonCode": None,
-            "PurposeCode": None,
-            "PurposeProprietary": None,
+            DomainCode=entry.DomainCode,
+            TransactionFamilyCode=entry.TransactionFamilyCode,
+            TransactionSubFamilyCode=entry.TransactionSubFamilyCode,
+            ProprietaryTransactionCode=None,
+            ReturnReasonCode=None,
+            PurposeCode=None,
+            PurposeProprietary=None,
             # Text & Remittance
-            "AdditionalEntryInfo": entry["AdditionalEntryInfo"],
-            "AdditionalTransactionInfo": None,
-            "UnstructuredRemittanceInfo": None,
-            "ReturnAdditionalInfo": None,
-            "CreditorReference": None,
-            "DocumentReferenceNumber": None,
+            AdditionalEntryInfo=entry.AdditionalEntryInfo,
+            AdditionalTransactionInfo=None,
+            UnstructuredRemittanceInfo=None,
+            ReturnAdditionalInfo=None,
+            CreditorReference=None,
+            DocumentReferenceNumber=None,
             # Batch Metadata & Advanced
-            "IsBatch": False,
-            "BatchIndex": 1,
-            "BatchTotal": 1,
-            "Advanced": copy.deepcopy(entry["Advanced"]),
-        }
-        tx_data: _TransactionData = {
-            "entry": entry_data,
-            "xml_element": entry_data["xml_element"],
-            "info": tx_info,
-        }
+            IsBatch=False,
+            BatchIndex=1,
+            BatchTotal=1,
+            Advanced=copy.deepcopy(entry.Advanced),
+        )
+        tx_data = _TransactionData(
+            entry=entry_data,
+            xml_element=entry_data.xml_element,
+            info=tx_info,
+        )
         _validate_transaction_batch([tx_data], self._settings)
         return tx_data
 
     def _get_transactions_from_entry(self, entry_data: _EntryData) -> list[_TransactionData]:
         ns = self._nsmap
-        statement = entry_data["statement"]["info"]
-        entry_elem = entry_data["xml_element"]
-        entry = entry_data["info"]
+        statement = entry_data.statement.info
+        entry_elem = entry_data.xml_element
+        entry = entry_data.info
         entry_log_prefix = _get_entry_log_prefix(entry_data)
         tx_details_elements = entry_elem.findall("./ns:NtryDtls/ns:TxDtls", ns)
         # Simple entry with no TxDtls, use Entry level data
@@ -497,13 +505,13 @@ class Camt053Parser:
             doc_refs = [el.text.strip() for el in doc_ref_elems if el.text and el.text.strip()]
             doc_ref_info = ", ".join(doc_refs) if doc_refs else None
             # Get the transaction amount and currency, with fallback to Entry level if not present in TxDtls
-            tx_amt_details = _get_amount_details_from_base_elem(tx_el, statement["AccountCurrency"], ns, self._settings)
-            if is_batch and (tx_amt_details["Amount"] is None or tx_amt_details["Currency"] is None):
+            tx_amt_details = _get_amount_details_from_base_elem(tx_el, statement.AccountCurrency, ns, self._settings)
+            if is_batch and (tx_amt_details.Amount is None or tx_amt_details.Currency is None):
                 raise ValueError(
                     f"{tx_log_prefix} is part of a batch but has no amount or currency, which is required for batch transactions."
                 )
-            tx_amt = tx_amt_details["Amount"] or entry["Amount"]
-            tx_ccy = tx_amt_details["Currency"] or entry["Currency"]
+            tx_amt = tx_amt_details.Amount or entry.Amount
+            tx_ccy = tx_amt_details.Currency or entry.Currency
             tx_credit_debit_indicator = _find_unique_elem_text(tx_el, "./ns:CdtDbtInd", ns)
             if tx_credit_debit_indicator is not None and not tx_credit_debit_indicator in ("CRDT", "DBIT"):
                 raise ValueError(
@@ -513,73 +521,72 @@ class Camt053Parser:
             tx_charges_elem = _find_oneof_unique_elem(tx_el, ["./ns:Chrgs/ns:Amt", "./ns:Chrgs/ns:Rcrd/ns:Amt"], ns)
             tx_chrgs_amt, tx_chrgs_ccy = _get_amount_and_currency(tx_charges_elem)
             if not is_batch and tx_chrgs_amt is None:
-                tx_chrgs_amt = entry["ChargesAmount"]
-                tx_chrgs_ccy = entry["ChargesCurrency"]
+                tx_chrgs_amt = entry.ChargesAmount
+                tx_chrgs_ccy = entry.ChargesCurrency
             # Build XML tree dict -> overwrite Ntry list with only this
             tx_xml_dict = _elem_to_dict(tx_el)
-            entry_xml_dict = copy.deepcopy(entry["Advanced"])
-            entry_xml_dict["children"]["Ntry"][0]["children"]["TxDtls"] = [tx_xml_dict]
+            entry_xml_dict = copy.deepcopy(entry.Advanced)
+            entry_xml_dict.children["Ntry"][0].children["TxDtls"] = [tx_xml_dict]
             # Build the TransactionInfo dict
-            tx_info: TransactionInfo = {
+            tx_info = TransactionInfo(
                 # Statement Context
-                "AccountIBAN": statement["AccountIBAN"],
-                "StatementId": statement["StatementId"],
+                AccountIBAN=statement.AccountIBAN,
+                StatementId=statement.StatementId,
                 # Identifiers & References
-                "EntryAccountServicerReference": entry["AccountServicerReference"],
-                "TransactionAccountServicerReference": tx_account_servicer_ref,
-                "EntryReference": entry["EntryReference"],
-                "PaymentInformationId": tx_pmt_inf_id,
-                "ClearingSystemReference": tx_clr_sys_ref,
-                "EndToEndId": tx_end_to_end_id,
-                "InstructionId": tx_instruction_id,
-                "MandateId": tx_mandate_id,
+                EntryAccountServicerReference=entry.AccountServicerReference,
+                TransactionAccountServicerReference=tx_account_servicer_ref,
+                EntryReference=entry.EntryReference,
+                PaymentInformationId=tx_pmt_inf_id,
+                ClearingSystemReference=tx_clr_sys_ref,
+                EndToEndId=tx_end_to_end_id,
+                InstructionId=tx_instruction_id,
+                MandateId=tx_mandate_id,
                 # Financial Details - Account / Ledger (Always present, always in Account Currency)
-                "Amount": tx_amt,
-                "Currency": tx_ccy,
-                "CreditDebitIndicator": tx_credit_debit_indicator or entry["CreditDebitIndicator"],
-                "BookingDate": entry["BookingDate"],
-                "ValueDate": entry["ValueDate"],
-                "ChargesAmount": tx_chrgs_amt,
-                "ChargesCurrency": tx_chrgs_ccy,
+                Amount=tx_amt,
+                Currency=tx_ccy,
+                CreditDebitIndicator=tx_credit_debit_indicator or entry.CreditDebitIndicator,
+                BookingDate=entry.BookingDate,
+                ValueDate=entry.ValueDate,
+                ChargesAmount=tx_chrgs_amt,
+                ChargesCurrency=tx_chrgs_ccy,
                 # Financial Details - Foreign / Instructed (Only populated when foreign currency is involved)
-                "ForeignAmount": tx_amt_details["ForeignAmount"] or entry["ForeignAmount"],
-                "ForeignCurrency": tx_amt_details["ForeignCurrency"] or entry["ForeignCurrency"],
-                "ExchangeRate": tx_amt_details["ExchangeRate"] or entry["ExchangeRate"],
+                ForeignAmount=tx_amt_details.ForeignAmount or entry.ForeignAmount,
+                ForeignCurrency=tx_amt_details.ForeignCurrency or entry.ForeignCurrency,
+                ExchangeRate=tx_amt_details.ExchangeRate or entry.ExchangeRate,
                 # Parties & Channels
-                "CreditorName": _find_unique_elem_text(tx_el, "./ns:RltdPties/ns:Cdtr/ns:Nm", ns, normalize=True),
-                "CreditorAccountIBAN": _find_unique_elem_text(tx_el, "./ns:RltdPties/ns:CdtrAcct/ns:Id/ns:IBAN", ns),
-                "CreditorAccountIdOther": _find_unique_elem_text(tx_el, "./ns:RltdPties/ns:CdtrAcct/ns:Id/ns:Othr/ns:Id", ns),
-                "UltimateCreditorName": _find_unique_elem_text(tx_el, "./ns:RltdPties/ns:UltmtCdtr/ns:Nm", ns, normalize=True),
-                "DebtorName": _find_unique_elem_text(tx_el, "./ns:RltdPties/ns:Dbtr/ns:Nm", ns, normalize=True),
-                "DebtorAccountIBAN": _find_unique_elem_text(tx_el, "./ns:RltdPties/ns:DbtrAcct/ns:Id/ns:IBAN", ns),
-                "DebtorAccountIdOther": _find_unique_elem_text(tx_el, "./ns:RltdPties/ns:DbtrAcct/ns:Id/ns:Othr/ns:Id", ns),
-                "UltimateDebtorName": _find_unique_elem_text(tx_el, "./ns:RltdPties/ns:UltmtDbtr/ns:Nm", ns, normalize=True),
-                "CardPoiId": _find_unique_elem_text(tx_el, "./ns:CardTx/ns:POI/ns:Id/ns:Id", ns) or entry["CardPoiId"],
-                "CardPan": _find_unique_elem_text(tx_el, "./ns:CardTx/ns:Card/ns:PlainCardData/ns:PAN", ns) or entry["CardPan"],
+                CreditorName=_find_unique_elem_text(tx_el, "./ns:RltdPties/ns:Cdtr/ns:Nm", ns, normalize=True),
+                CreditorAccountIBAN=_find_unique_elem_text(tx_el, "./ns:RltdPties/ns:CdtrAcct/ns:Id/ns:IBAN", ns),
+                CreditorAccountIdOther=_find_unique_elem_text(tx_el, "./ns:RltdPties/ns:CdtrAcct/ns:Id/ns:Othr/ns:Id", ns),
+                UltimateCreditorName=_find_unique_elem_text(tx_el, "./ns:RltdPties/ns:UltmtCdtr/ns:Nm", ns, normalize=True),
+                DebtorName=_find_unique_elem_text(tx_el, "./ns:RltdPties/ns:Dbtr/ns:Nm", ns, normalize=True),
+                DebtorAccountIBAN=_find_unique_elem_text(tx_el, "./ns:RltdPties/ns:DbtrAcct/ns:Id/ns:IBAN", ns),
+                DebtorAccountIdOther=_find_unique_elem_text(tx_el, "./ns:RltdPties/ns:DbtrAcct/ns:Id/ns:Othr/ns:Id", ns),
+                UltimateDebtorName=_find_unique_elem_text(tx_el, "./ns:RltdPties/ns:UltmtDbtr/ns:Nm", ns, normalize=True),
+                CardPoiId=_find_unique_elem_text(tx_el, "./ns:CardTx/ns:POI/ns:Id/ns:Id", ns) or entry.CardPoiId,
+                CardPan=_find_unique_elem_text(tx_el, "./ns:CardTx/ns:Card/ns:PlainCardData/ns:PAN", ns) or entry.CardPan,
                 # ISO & Proprietary Codes (Tx level fallback to Entry level)
-                "DomainCode": _find_unique_elem_text(tx_el, "./ns:BkTxCd/ns:Domn/ns:Cd", ns) or entry["DomainCode"],
-                "TransactionFamilyCode": _find_unique_elem_text(tx_el, "./ns:BkTxCd/ns:Domn/ns:Fmly/ns:Cd", ns)
-                or entry["TransactionFamilyCode"],
-                "TransactionSubFamilyCode": _find_unique_elem_text(tx_el, "./ns:BkTxCd/ns:Domn/ns:Fmly/ns:SubFmlyCd", ns)
-                or entry["TransactionSubFamilyCode"],
-                "ProprietaryTransactionCode": _find_unique_elem_text(tx_el, "./ns:BkTxCd/ns:Prtry/ns:Cd", ns),
-                "ReturnReasonCode": _find_oneof_unique_elem_text(tx_el, ["./ns:RtrInf/ns:Rsn/ns:Cd", "./ns:RtrInf/ns:Rsn/ns:Prtry"], ns),
-                "PurposeCode": _find_unique_elem_text(tx_el, "./ns:Purp/ns:Cd", ns),
-                "PurposeProprietary": _find_unique_elem_text(tx_el, "./ns:Purp/ns:Prtry", ns, normalize=True),
+                DomainCode=_find_unique_elem_text(tx_el, "./ns:BkTxCd/ns:Domn/ns:Cd", ns) or entry.DomainCode,
+                TransactionFamilyCode=_find_unique_elem_text(tx_el, "./ns:BkTxCd/ns:Domn/ns:Fmly/ns:Cd", ns) or entry.TransactionFamilyCode,
+                TransactionSubFamilyCode=_find_unique_elem_text(tx_el, "./ns:BkTxCd/ns:Domn/ns:Fmly/ns:SubFmlyCd", ns)
+                or entry.TransactionSubFamilyCode,
+                ProprietaryTransactionCode=_find_unique_elem_text(tx_el, "./ns:BkTxCd/ns:Prtry/ns:Cd", ns),
+                ReturnReasonCode=_find_oneof_unique_elem_text(tx_el, ["./ns:RtrInf/ns:Rsn/ns:Cd", "./ns:RtrInf/ns:Rsn/ns:Prtry"], ns),
+                PurposeCode=_find_unique_elem_text(tx_el, "./ns:Purp/ns:Cd", ns),
+                PurposeProprietary=_find_unique_elem_text(tx_el, "./ns:Purp/ns:Prtry", ns, normalize=True),
                 # Text & Remittance
-                "AdditionalEntryInfo": entry["AdditionalEntryInfo"],
-                "AdditionalTransactionInfo": _find_unique_elem_text(tx_el, "./ns:AddtlTxInf", ns, normalize=True),
-                "UnstructuredRemittanceInfo": ustrd_info,
-                "ReturnAdditionalInfo": _find_unique_elem_text(tx_el, "./ns:RtrInf/ns:AddtlInf", ns, normalize=True),
-                "CreditorReference": _find_unique_elem_text(tx_el, "./ns:RmtInf/ns:Strd/ns:CdtrRefInf/ns:Ref", ns),
-                "DocumentReferenceNumber": doc_ref_info,
+                AdditionalEntryInfo=entry.AdditionalEntryInfo,
+                AdditionalTransactionInfo=_find_unique_elem_text(tx_el, "./ns:AddtlTxInf", ns, normalize=True),
+                UnstructuredRemittanceInfo=ustrd_info,
+                ReturnAdditionalInfo=_find_unique_elem_text(tx_el, "./ns:RtrInf/ns:AddtlInf", ns, normalize=True),
+                CreditorReference=_find_unique_elem_text(tx_el, "./ns:RmtInf/ns:Strd/ns:CdtrRefInf/ns:Ref", ns),
+                DocumentReferenceNumber=doc_ref_info,
                 # Batch Metadata & Advanced
-                "IsBatch": is_batch,
-                "BatchIndex": idx + 1,
-                "BatchTotal": num_tx_elements,
-                "Advanced": entry_xml_dict,
-            }
-            transactions_data.append({"entry": entry_data, "xml_element": tx_el, "info": tx_info})
+                IsBatch=is_batch,
+                BatchIndex=idx + 1,
+                BatchTotal=num_tx_elements,
+                Advanced=entry_xml_dict,
+            )
+            transactions_data.append(_TransactionData(entry=entry_data, xml_element=tx_el, info=tx_info))
         # result
         _validate_transaction_batch(transactions_data, self._settings)
         return transactions_data
@@ -597,7 +604,7 @@ class Camt053Parser:
         statements = self._get_statements()
         entries = self._get_entries_from_statements(statements)
         transactions = self._get_transactions_from_entries(entries)
-        return [tx["info"] for tx in transactions]
+        return [tx.info for tx in transactions]
 
 
 def _extract_ns(tag: str) -> str:
@@ -693,11 +700,11 @@ def _elem_to_dict(elem: ET._Element) -> XmlElementDict:
         child_dict = _elem_to_dict(child)
         children_dict[child_tag].append(child_dict)
     # Resulting dictionary structure
-    return {
-        "text": text,
-        "attrib": attribs,
-        "children": children_dict,
-    }
+    return XmlElementDict(
+        text=text,
+        attrib=attribs,
+        children=children_dict,
+    )
 
 
 def _get_amount_and_currency(amt_elem: ET._Element | None) -> tuple[Decimal, str] | tuple[None, None]:
@@ -740,13 +747,13 @@ def _get_amount_details_from_base_elem(
     @param ns: The namespace mapping for XPath queries.
     """
     if base_elem is None:
-        return {
-            "Amount": None,
-            "Currency": None,
-            "ForeignAmount": None,
-            "ForeignCurrency": None,
-            "ExchangeRate": None,
-        }
+        return _AmountDetails(
+            Amount=None,
+            Currency=None,
+            ForeignAmount=None,
+            ForeignCurrency=None,
+            ExchangeRate=None,
+        )
     # Base Amount
     base_amt_el = _find_unique_elem(base_elem, "./ns:Amt", ns)
     base_amt, base_ccy = _get_amount_and_currency(base_amt_el)
@@ -797,13 +804,13 @@ def _get_amount_details_from_base_elem(
     # Order of precedence: CntrValAmt > TxAmt > InstdAmt > BaseAmt
     xchg_rate = None
     if cntr_val_exchange_details:
-        xchg_rate = cntr_val_exchange_details["ExchangeRate"]
+        xchg_rate = cntr_val_exchange_details.ExchangeRate
     elif tx_exchange_details:
-        xchg_rate = tx_exchange_details["ExchangeRate"]
+        xchg_rate = tx_exchange_details.ExchangeRate
     elif instructed_exchange_details:
-        xchg_rate = instructed_exchange_details["ExchangeRate"]
+        xchg_rate = instructed_exchange_details.ExchangeRate
     elif base_exchange_details:
-        xchg_rate = base_exchange_details["ExchangeRate"]
+        xchg_rate = base_exchange_details.ExchangeRate
     # If no explicit exchange rate is provided, but both foreign and ledger amounts are present, we can calculate the exchange rate.
     if xchg_rate is None and foreign_amt is not None and ledger_amt is not None:
         # If no explicit exchange rate is provided, we can calculate it from the foreign and ledger amounts.
@@ -826,13 +833,13 @@ def _get_amount_details_from_base_elem(
             logger.warning(f"DEBUG EXCHANGE RATE INVERSION: foreign_amt={foreign_amt}, ledger_amt={ledger_amt}, xchg_rate={xchg_rate}")
             xchg_rate = Decimal("1") / xchg_rate
     # build and validate the result
-    result: _AmountDetails = {
-        "Amount": ledger_amt,
-        "Currency": ledger_ccy,
-        "ForeignAmount": foreign_amt,
-        "ForeignCurrency": foreign_ccy,
-        "ExchangeRate": xchg_rate,
-    }
+    result = _AmountDetails(
+        Amount=ledger_amt,
+        Currency=ledger_ccy,
+        ForeignAmount=foreign_amt,
+        ForeignCurrency=foreign_ccy,
+        ExchangeRate=xchg_rate,
+    )
     _validate_amount_details(result, settings, check_completeness=False)
     return result
 
@@ -842,11 +849,11 @@ def _validate_amount_details(amt_details: _AmountDetails, settings: Camt053Parse
     Validates the amount details to ensure that the ledger and foreign amounts and currencies are consistent.
     Raises ValueError if any inconsistencies are found.
     """
-    ledger_amt = amt_details["Amount"]
-    ledger_ccy = amt_details["Currency"]
-    foreign_amt = amt_details["ForeignAmount"]
-    foreign_ccy = amt_details["ForeignCurrency"]
-    xchg_rate = amt_details["ExchangeRate"]
+    ledger_amt = amt_details.Amount
+    ledger_ccy = amt_details.Currency
+    foreign_amt = amt_details.ForeignAmount
+    foreign_ccy = amt_details.ForeignCurrency
+    xchg_rate = amt_details.ExchangeRate
     if (ledger_amt is None and ledger_ccy is not None) or (ledger_amt is not None and ledger_ccy is None):
         raise ValueError(
             f"Ledger amount and currency must both be present or both be None. Found: Amount={ledger_amt}, Currency={ledger_ccy}"
@@ -864,9 +871,9 @@ def _validate_amount_details(amt_details: _AmountDetails, settings: Camt053Parse
         try:
             calculated_amt = foreign_amt * xchg_rate
             exchange_error = abs(calculated_amt - ledger_amt)
-            if exchange_error > settings["exchange_rate_result_tolerance"]:  # amounts usually round to 2 decimal places, so allow
+            if exchange_error > settings.exchange_rate_result_tolerance:  # amounts usually round to 2 decimal places, so allow
                 raise ValueError(
-                    f"Exchange rate error too big. {foreign_amt}{foreign_ccy} * {xchg_rate} = {calculated_amt}{ledger_ccy}, which differs from the ledger amount {ledger_amt}{ledger_ccy} by more than the allowed tolerance of {settings['exchange_rate_result_tolerance']}."
+                    f"Exchange rate error too big. {foreign_amt}{foreign_ccy} * {xchg_rate} = {calculated_amt}{ledger_ccy}, which differs from the ledger amount {ledger_amt}{ledger_ccy} by more than the allowed tolerance of {settings.exchange_rate_result_tolerance}."
                 )
         except Exception as e:
             raise
@@ -884,7 +891,7 @@ def _validate_amount_details(amt_details: _AmountDetails, settings: Camt053Parse
         raise ValueError(f"Exchange rate {xchg_rate} is present, but no foreign amount or currency could be determined.")
 
 
-def _get_currency_exchange_details(exchange_elem: ET._Element | None, ns: dict) -> CurrencyExchangeDetails | None:
+def _get_currency_exchange_details(exchange_elem: ET._Element | None, ns: dict) -> _CurrencyExchangeDetails | None:
     """
     Extracts the source currency, target currency, and exchange rate from a CcyXchg element.
     Returns a CurrencyExchangeDetails dict or None if the input element is None.
@@ -926,11 +933,11 @@ def _get_currency_exchange_details(exchange_elem: ET._Element | None, ns: dict) 
         raise ValueError(f"Failed to convert exchange rate '{exch_rate_text}' to Decimal: {e}")
     exch_rate = exch_rate_stated if not invert_exchange else Decimal("1") / exch_rate_stated
     # return the details
-    return {
-        "SourceCurrency": source_ccy,
-        "TargetCurrency": target_ccy,
-        "ExchangeRate": exch_rate,
-    }
+    return _CurrencyExchangeDetails(
+        SourceCurrency=source_ccy,
+        TargetCurrency=target_ccy,
+        ExchangeRate=exch_rate,
+    )
 
 
 def _get_date_or_datetime_from_base_elem(
@@ -978,24 +985,22 @@ def _validate_transaction(tx_data: _TransactionData, settings: Camt053ParserSett
     Please call _validate_transaction_batch for validation, as it will also check entry consistency and batch totals.
     Raises ValueError if any inconsistencies are found.
     """
-    statement = tx_data["entry"]["statement"]["info"]
-    entry = tx_data["entry"]["info"]
-    tx = tx_data["info"]
+    statement = tx_data.entry.statement.info
+    entry = tx_data.entry.info
+    tx = tx_data.info
     tx_log_prefix = _get_tx_log_prefix(tx_data)
     # validate amounts and currencies
-    if tx["Currency"] != statement["AccountCurrency"]:
-        raise ValueError(
-            f"{tx_log_prefix}: Currency ({tx['Currency']}) does not match the account currency ({statement['AccountCurrency']})."
-        )
-    if tx["Currency"] != entry["Currency"]:
-        raise ValueError(f"{tx_log_prefix}: Currency ({tx['Currency']}) does not match the entry currency ({entry['Currency']}).")
-    amt_details: _AmountDetails = {
-        "Amount": tx["Amount"],
-        "Currency": tx["Currency"],
-        "ForeignAmount": tx["ForeignAmount"],
-        "ForeignCurrency": tx["ForeignCurrency"],
-        "ExchangeRate": tx["ExchangeRate"],
-    }
+    if tx.Currency != statement.AccountCurrency:
+        raise ValueError(f"{tx_log_prefix}: Currency ({tx.Currency}) does not match the account currency ({statement.AccountCurrency}).")
+    if tx.Currency != entry.Currency:
+        raise ValueError(f"{tx_log_prefix}: Currency ({tx.Currency}) does not match the entry currency ({entry.Currency}).")
+    amt_details = _AmountDetails(
+        Amount=tx.Amount,
+        Currency=tx.Currency,
+        ForeignAmount=tx.ForeignAmount,
+        ForeignCurrency=tx.ForeignCurrency,
+        ExchangeRate=tx.ExchangeRate,
+    )
     _validate_amount_details(amt_details, settings=settings, check_completeness=True)
 
 
@@ -1009,8 +1014,8 @@ def _validate_transaction_batch(transactions_data: list[_TransactionData], setti
     """
     if len(transactions_data) < 1:
         raise ValueError("Transaction batch validation requires at least one transaction.")
-    entry_data = transactions_data[0]["entry"]
-    entry = entry_data["info"]
+    entry_data = transactions_data[0].entry
+    entry = entry_data.info
     entry_log_prefix = _get_entry_log_prefix(entry_data)
     # prepare values for total batch validation
     seen_tx_acct_svcr_refs: set[str] = set()
@@ -1018,26 +1023,26 @@ def _validate_transaction_batch(transactions_data: list[_TransactionData], setti
     # Validate each transaction in the batch
     for tx_data in transactions_data:
         _validate_transaction(tx_data, settings=settings)
-        tx = tx_data["info"]
+        tx = tx_data.info
         tx_log_prefix = _get_tx_log_prefix(tx_data)
         # If we mess up the entry reference, we want to catch it here and raise an error.
-        if tx_data["entry"] is not entry_data:
+        if tx_data.entry is not entry_data:
             raise ValueError(f"{tx_log_prefix}: belongs to a different entry than the first batch transaction.")
         # Building sum
-        if tx["CreditDebitIndicator"] == entry["CreditDebitIndicator"]:
-        tx_total_amt += tx["Amount"]
+        if tx.CreditDebitIndicator == entry.CreditDebitIndicator:
+            tx_total_amt += tx.Amount
         else:
-            tx_total_amt -= tx["Amount"]
+            tx_total_amt -= tx.Amount
         # Validate unique TransactionAccountServicerReference for each transaction in a batch
-        tx_asr = tx["TransactionAccountServicerReference"]
+        tx_asr = tx.TransactionAccountServicerReference
         if tx_asr is not None:
             if tx_asr in seen_tx_acct_svcr_refs:
                 raise ValueError(f"{tx_log_prefix}: reused the AccountServicerReference '{tx_asr}', which must be unique within a batch.")
             seen_tx_acct_svcr_refs.add(tx_asr)
     # Sum Validation
-    if tx_total_amt != entry["Amount"]:
+    if tx_total_amt != entry.Amount:
         raise ValueError(
-            f"{entry_log_prefix}: The sum of batch transaction amounts ({tx_total_amt}) is not equal to the entry amount ({entry['Amount']})."
+            f"{entry_log_prefix}: The sum of batch transaction amounts ({tx_total_amt}) is not equal to the entry amount ({entry.Amount})."
         )
 
 
@@ -1058,15 +1063,9 @@ def _get_tx_log_prefix(tx_data: _TransactionData) -> str:
     Generates an identifier for log messages, based on the entry and transaction references. If no references are available, it falls back to using the batch index.
     This is useful for logging and error messages to identify a transaction within an entry.
     """
-    entry_prefix = _get_entry_log_prefix(tx_data["entry"])
-    tx = tx_data["info"]
-    tx_id = (
-        tx["TransactionAccountServicerReference"]
-        or tx["EndToEndId"]
-        or tx["InstructionId"]
-        or tx["MandateId"]
-        or f"<idx={tx['BatchIndex']}>"
-    )
+    entry_prefix = _get_entry_log_prefix(tx_data.entry)
+    tx = tx_data.info
+    tx_id = tx.TransactionAccountServicerReference or tx.EndToEndId or tx.InstructionId or tx.MandateId or f"<idx={tx.BatchIndex}>"
     return f"{entry_prefix}, Transaction '{tx_id}'"
 
 
@@ -1075,6 +1074,6 @@ def _get_entry_log_prefix(entry_data: _EntryData) -> str:
     Generates an identifier for log messages, based on the entry references. If no references are available, it falls back to using the entry index.
     This is useful for logging and error messages to identify an entry within a statement.
     """
-    entry = entry_data["info"]
-    entry_id = entry["AccountServicerReference"] or entry["EntryReference"] or "<unknown>"
+    entry = entry_data.info
+    entry_id = entry.AccountServicerReference or entry.EntryReference or "<unknown>"
     return f"Entry '{entry_id}'"
