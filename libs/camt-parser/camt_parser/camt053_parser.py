@@ -3,7 +3,7 @@ import logging
 import pathlib
 from datetime import date, datetime
 from decimal import Decimal
-from typing import TypedDict, overload
+from typing import TypedDict, Literal
 
 from lxml import etree as ET
 
@@ -60,7 +60,7 @@ class EntryInfo(TypedDict):
     # Financial Details - Account / Ledger (always in Account Currency)
     Amount: Decimal
     Currency: str
-    CreditDebitIndicator: str | None
+    CreditDebitIndicator: Literal["CRDT", "DBIT"]
     BookingDate: date | datetime | None
     ValueDate: date | datetime | None
 
@@ -114,7 +114,7 @@ class TransactionInfo(TypedDict):
     """The final settled amount applied to the ledger."""
     Currency: str
     """The currency of the ledger account."""
-    CreditDebitIndicator: str | None
+    CreditDebitIndicator: Literal["CRDT", "DBIT"]
     """CRDT (Deposit) or DBIT (Withdrawal)."""
     BookingDate: date | datetime | None
     """The date the transaction was booked to the ledger."""
@@ -316,6 +316,9 @@ class Camt053Parser:
                 raise ValueError(f"{entry_log_prefix}: Currency {log_currency} does not match the account currency {account_currency}.")
             if not amt_details["Amount"] or not amt_details["Currency"]:
                 raise ValueError(f"{entry_log_prefix} does not have a valid amount or currency.")
+            credit_debit_indicator = _find_unique_elem_text(ntry_el, "./ns:CdtDbtInd", ns)
+            if not credit_debit_indicator in ("CRDT", "DBIT"):
+                raise ValueError(f"{entry_log_prefix} has an invalid <CdtDbtInd> '{credit_debit_indicator}'. Must be 'CRDT' or 'DBIT'.")
             # other data which is not directly mapped to the EntryInfo dict
             reversal_text = _find_unique_elem_text(ntry_el, "./ns:RvslInd", ns) or "false"
             reversal_indicator = reversal_text.lower() == "true"
@@ -340,7 +343,7 @@ class Camt053Parser:
                 # Financial Details - Account / Ledger (always in Account Currency)
                 "Amount": amt_details["Amount"],
                 "Currency": amt_details["Currency"],
-                "CreditDebitIndicator": _find_unique_elem_text(ntry_el, "./ns:CdtDbtInd", ns),
+                "CreditDebitIndicator": credit_debit_indicator,
                 "BookingDate": booking_date,
                 "ValueDate": value_date,
                 "ChargesAmount": chrgs_amt,
@@ -501,6 +504,11 @@ class Camt053Parser:
                 )
             tx_amt = tx_amt_details["Amount"] or entry["Amount"]
             tx_ccy = tx_amt_details["Currency"] or entry["Currency"]
+            tx_credit_debit_indicator = _find_unique_elem_text(tx_el, "./ns:CdtDbtInd", ns)
+            if tx_credit_debit_indicator is not None and not tx_credit_debit_indicator in ("CRDT", "DBIT"):
+                raise ValueError(
+                    f"{tx_log_prefix} has an invalid CreditDebitIndicator '{tx_credit_debit_indicator}'. Must be 'CRDT' or 'DBIT'."
+                )
             # Get charges from transaction details, with conditional fallback to Entry level if not present in TxDtls
             tx_charges_elem = _find_oneof_unique_elem(tx_el, ["./ns:Chrgs/ns:Amt", "./ns:Chrgs/ns:Rcrd/ns:Amt"], ns)
             tx_chrgs_amt, tx_chrgs_ccy = _get_amount_and_currency(tx_charges_elem)
@@ -528,7 +536,7 @@ class Camt053Parser:
                 # Financial Details - Account / Ledger (Always present, always in Account Currency)
                 "Amount": tx_amt,
                 "Currency": tx_ccy,
-                "CreditDebitIndicator": entry["CreditDebitIndicator"],
+                "CreditDebitIndicator": tx_credit_debit_indicator or entry["CreditDebitIndicator"],
                 "BookingDate": entry["BookingDate"],
                 "ValueDate": entry["ValueDate"],
                 "ChargesAmount": tx_chrgs_amt,
@@ -1007,7 +1015,10 @@ def _validate_transaction_batch(transactions_data: list[_TransactionData], setti
         if tx_data["entry"] is not entry_data:
             raise ValueError(f"{tx_log_prefix}: belongs to a different entry than the first batch transaction.")
         # Building sum
+        if tx["CreditDebitIndicator"] == entry["CreditDebitIndicator"]:
         tx_total_amt += tx["Amount"]
+        else:
+            tx_total_amt -= tx["Amount"]
         # Validate unique TransactionAccountServicerReference for each transaction in a batch
         tx_asr = tx["TransactionAccountServicerReference"]
         if tx_asr is not None:
