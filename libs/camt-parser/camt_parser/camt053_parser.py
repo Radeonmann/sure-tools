@@ -79,6 +79,10 @@ class EntryInfo:
     DomainCode: str | None
     TransactionFamilyCode: str | None
     TransactionSubFamilyCode: str | None
+    ProprietaryTransactionCode: str | None
+    ReturnReasonCode: str | None
+    PurposeCode: str | None
+    PurposeProprietary: str | None
     CardPoiId: str | None
     CardPan: str | None
     ChargesAmount: Decimal | None
@@ -97,9 +101,9 @@ class TransactionInfo:
 
     # Identifiers & References
     EntryAccountServicerReference: str | None
-    """The bank's internal reference for the Entry."""
+    """The bank's internal reference for the Entry (Ntry)."""
     TransactionAccountServicerReference: str | None
-    """The bank's internal reference for the specific transaction (if provided, it is unique within a batch in this parser)."""
+    """The bank's internal reference for the specific transaction (TxDtls) (if provided, it is unique within a batch in this parser)."""
     EntryReference: str | None
     """The primary reference of the Entry."""
     PaymentInformationId: str | None
@@ -160,20 +164,34 @@ class TransactionInfo:
     """The masked card number used for the transaction."""
 
     # ISO & Proprietary Codes
+    EntryDomainCode: str | None
+    """ISO standard classification domain code at the Entry level (e.g., PMNT)."""
+    EntryTransactionFamilyCode: str | None
+    """ISO standard classification family code at the Entry level (e.g., ICDT)."""
+    EntryTransactionSubFamilyCode: str | None
+    """ISO standard classification sub-family code at the Entry level (e.g., STDO)."""
+    EntryProprietaryTransactionCode: str | None
+    """Bank-specific internal transaction code at the Entry level."""
+    EntryReturnReasonCode: str | None
+    """The ISO reason code if the entry bounced/reversed (e.g., AC01) at the Entry level."""
+    EntryPurposeCode: str | None
+    """The ISO category for the payment (e.g., SALA for Salary) at the Entry level."""
+    EntryPurposeProprietary: str | None
+    """A proprietary category for the payment at the Entry level."""
     DomainCode: str | None
-    """ISO standard classification domain code (e.g., PMNT)."""
+    """ISO standard classification domain code (e.g., PMNT) at the TxDetails level."""
     TransactionFamilyCode: str | None
-    """ISO standard classification family code (e.g., ICDT)."""
+    """ISO standard classification family code (e.g., ICDT) at the TxDetails level."""
     TransactionSubFamilyCode: str | None
-    """ISO standard classification sub-family code (e.g., DMCT)."""
+    """ISO standard classification sub-family code (e.g., DMCT) at the TxDetails level."""
     ProprietaryTransactionCode: str | None
-    """Bank-specific internal transaction code."""
+    """Bank-specific internal transaction code at the TxDetails level."""
     ReturnReasonCode: str | None
-    """The ISO reason code if the transaction bounced/reversed (e.g., AC01)."""
+    """The ISO reason code if the transaction bounced/reversed (e.g., AC01) at the TxDetails level."""
     PurposeCode: str | None
-    """The ISO category for the payment (e.g., SALA for Salary)."""
+    """The ISO category for the payment (e.g., SALA for Salary) at the TxDetails level."""
     PurposeProprietary: str | None
-    """A proprietary category for the payment."""
+    """A proprietary category for the payment at the TxDetails level."""
 
     # Text & Remittance
     AdditionalEntryInfo: str | None
@@ -367,6 +385,10 @@ class Camt053Parser:
                 DomainCode=_find_unique_elem_text(ntry_el, "./ns:BkTxCd/ns:Domn/ns:Cd", ns),
                 TransactionFamilyCode=_find_unique_elem_text(ntry_el, "./ns:BkTxCd/ns:Domn/ns:Fmly/ns:Cd", ns),
                 TransactionSubFamilyCode=_find_unique_elem_text(ntry_el, "./ns:BkTxCd/ns:Domn/ns:Fmly/ns:SubFmlyCd", ns),
+                ProprietaryTransactionCode=_find_unique_elem_text(ntry_el, "./ns:BkTxCd/ns:Prtry/ns:Cd", ns),
+                ReturnReasonCode=_find_oneof_unique_elem_text(ntry_el, ["./ns:RtrInf/ns:Rsn/ns:Cd", "./ns:RtrInf/ns:Rsn/ns:Prtry"], ns),
+                PurposeCode=_find_unique_elem_text(ntry_el, "./ns:Purp/ns:Cd", ns),
+                PurposeProprietary=_find_unique_elem_text(ntry_el, "./ns:Purp/ns:Prtry", ns, normalize=True),
                 CardPoiId=_find_unique_elem_text(ntry_el, "./ns:CardTx/ns:POI/ns:Id/ns:Id", ns),
                 CardPan=_find_unique_elem_text(ntry_el, "./ns:CardTx/ns:Card/ns:PlainCardData/ns:PAN", ns),
                 # Advanced Raw XML Payload Includes whole tree, but stripped of all elements which are not descendants or ancestors
@@ -425,9 +447,16 @@ class Camt053Parser:
             CardPoiId=entry.CardPoiId,
             CardPan=entry.CardPan,
             # ISO & Proprietary Codes
-            DomainCode=entry.DomainCode,
-            TransactionFamilyCode=entry.TransactionFamilyCode,
-            TransactionSubFamilyCode=entry.TransactionSubFamilyCode,
+            EntryDomainCode=entry.DomainCode,
+            EntryTransactionFamilyCode=entry.TransactionFamilyCode,
+            EntryTransactionSubFamilyCode=entry.TransactionSubFamilyCode,
+            EntryProprietaryTransactionCode=entry.ProprietaryTransactionCode,
+            EntryReturnReasonCode=entry.ReturnReasonCode,
+            EntryPurposeCode=entry.PurposeCode,
+            EntryPurposeProprietary=entry.PurposeProprietary,
+            DomainCode=None,
+            TransactionFamilyCode=None,
+            TransactionSubFamilyCode=None,
             ProprietaryTransactionCode=None,
             ReturnReasonCode=None,
             PurposeCode=None,
@@ -564,11 +593,17 @@ class Camt053Parser:
                 UltimateDebtorName=_find_unique_elem_text(tx_el, "./ns:RltdPties/ns:UltmtDbtr/ns:Nm", ns, normalize=True),
                 CardPoiId=_find_unique_elem_text(tx_el, "./ns:CardTx/ns:POI/ns:Id/ns:Id", ns) or entry.CardPoiId,
                 CardPan=_find_unique_elem_text(tx_el, "./ns:CardTx/ns:Card/ns:PlainCardData/ns:PAN", ns) or entry.CardPan,
-                # ISO & Proprietary Codes (Tx level fallback to Entry level)
-                DomainCode=_find_unique_elem_text(tx_el, "./ns:BkTxCd/ns:Domn/ns:Cd", ns) or entry.DomainCode,
-                TransactionFamilyCode=_find_unique_elem_text(tx_el, "./ns:BkTxCd/ns:Domn/ns:Fmly/ns:Cd", ns) or entry.TransactionFamilyCode,
-                TransactionSubFamilyCode=_find_unique_elem_text(tx_el, "./ns:BkTxCd/ns:Domn/ns:Fmly/ns:SubFmlyCd", ns)
-                or entry.TransactionSubFamilyCode,
+                # ISO & Proprietary Codes
+                EntryDomainCode=entry.DomainCode,
+                EntryTransactionFamilyCode=entry.TransactionFamilyCode,
+                EntryTransactionSubFamilyCode=entry.TransactionSubFamilyCode,
+                EntryProprietaryTransactionCode=entry.ProprietaryTransactionCode,
+                EntryReturnReasonCode=entry.ReturnReasonCode,
+                EntryPurposeCode=entry.PurposeCode,
+                EntryPurposeProprietary=entry.PurposeProprietary,
+                DomainCode=_find_unique_elem_text(tx_el, "./ns:BkTxCd/ns:Domn/ns:Cd", ns),
+                TransactionFamilyCode=_find_unique_elem_text(tx_el, "./ns:BkTxCd/ns:Domn/ns:Fmly/ns:Cd", ns),
+                TransactionSubFamilyCode=_find_unique_elem_text(tx_el, "./ns:BkTxCd/ns:Domn/ns:Fmly/ns:SubFmlyCd", ns),
                 ProprietaryTransactionCode=_find_unique_elem_text(tx_el, "./ns:BkTxCd/ns:Prtry/ns:Cd", ns),
                 ReturnReasonCode=_find_oneof_unique_elem_text(tx_el, ["./ns:RtrInf/ns:Rsn/ns:Cd", "./ns:RtrInf/ns:Rsn/ns:Prtry"], ns),
                 PurposeCode=_find_unique_elem_text(tx_el, "./ns:Purp/ns:Cd", ns),

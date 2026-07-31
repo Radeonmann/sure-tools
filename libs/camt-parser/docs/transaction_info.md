@@ -2,6 +2,18 @@
 
 The `Camt053Parser.get_transactions()` method returns a flat list of `TransactionInfo` dictionaries. This schema collapses the deep XML hierarchy (`Statement` -> `Entry` -> `Transaction Details`) into a single, comprehensive record.
 
+## Entry level / transaction details level
+
+Even though we flatten the XML hierarchy into a single flat dict, we still provide many fields twice, once with an entry prefix and once without. The two fields repreent the value which was set on entry level and the value which was set on transaction level. The reason for this is, that otherwise information may get lost, and as a consumer I also may not know where the data originated.
+
+One example are the transaction codes (DomainCode - TransactionFamilyCode - TransactionSubFamilyCode). If I have a standing order in my private bank statements, I get the codes `PMNT-ICDT-STDO` on Ntry level. But for the same transaction, I get `PMNT-ICDT-DMCT` on the TxDtls level. The bank does this to say: "This whole batch is a standing order (`STDO`), but this specific line item was executed as a domestic credit transfer (`DMCT`)." This also means, that with only the TxDtls codes, we would lose important information.
+
+As our philisophy is a transparent parser with clear sources for each field, we also do not automatically inherit the fields from the entry level for the values which we state for both levels. It means if the XML e.g. has a value for DomainCode on the Ntry, but no TxDtls element, our field DomainCode will be `None` and only EntryDomainCode will be set. This allows clear decisions on the consumer side. The minor disadvantage is, that the consumer select the field themselves if they simply want one value. But this is trivial code, e.g.:
+
+```python
+domain_code = camt_tx.DomainCode or camt_tx.EntryDomainCode
+```
+
 ## Statement Context
 
 - **`StatementId`**: The ID of the parent statement.
@@ -11,9 +23,9 @@ The `Camt053Parser.get_transactions()` method returns a flat list of `Transactio
 
 ## Identifiers & References
 
-- **`EntryAccountServicerReference`**: The bank's internal reference for the Entry.
+- **`EntryAccountServicerReference`**: The bank's internal reference for the Entry (Ntry).
   - _Source:_ `<Ntry>/<AcctSvcrRef>`
-- **`TransactionAccountServicerReference`**: The bank's internal reference for the specific transaction (if provided, it is unique within a batch in this parser).
+- **`TransactionAccountServicerReference`**: The bank's internal reference for the specific transaction (TxDtls) (if provided, it is unique within a batch in this parser).
   - _Source:_ `<TxDtls>/<Refs>/<AcctSvcrRef>`
 - **`EntryReference`**: The primary reference of the Entry.
   - _Source:_ `<Ntry>/<NtryRef>`
@@ -77,19 +89,33 @@ _(Populated only if a currency conversion occurred)_
 
 ## ISO & Proprietary Codes
 
-- **`DomainCode`**: ISO standard classification domain code (e.g., `PMNT`).
-  - _Source:_ `<TxDtls>/<BkTxCd>/<Domn>/<Cd>` (Falls back to `<Ntry>`)
-- **`TransactionFamilyCode`**: ISO standard classification family code (e.g., `ICDT`).
-  - _Source:_ `<TxDtls>/<BkTxCd>/<Domn>/<Fmly>/<Cd>` (Falls back to `<Ntry>`)
-- **`TransactionSubFamilyCode`**: ISO standard classification sub-family code (e.g., `DMCT`).
-  - _Source:_ `<TxDtls>/<BkTxCd>/<Domn>/<Fmly>/<SubFmlyCd>` (Falls back to `<Ntry>`)
-- **`ProprietaryTransactionCode`**: Bank-specific internal transaction code.
+- **`EntryDomainCode`**: ISO standard classification domain code at the Entry level (e.g., `PMNT`).
+  - _Source:_ `<Ntry>/<BkTxCd>/<Domn>/<Cd>`
+- **`EntryTransactionFamilyCode`**: ISO standard classification family code at the Entry level (e.g., `ICDT`).
+  - _Source:_ `<Ntry>/<BkTxCd>/<Domn>/<Fmly>/<Cd>`
+- **`EntryTransactionSubFamilyCode`**: ISO standard classification sub-family code at the Entry level (e.g., `STDO`).
+  - _Source:_ `<Ntry>/<BkTxCd>/<Domn>/<Fmly>/<SubFmlyCd>`
+- **`EntryProprietaryTransactionCode`**: Bank-specific internal transaction code at the Entry level.
+  - _Source:_ `<Ntry>/<BkTxCd>/<Prtry>/<Cd>`
+- **`EntryReturnReasonCode`**: The ISO reason code if the entry bounced/reversed (e.g., `AC01`) at the Entry level.
+  - _Source:_ `<Ntry>/<RtrInf>/<Rsn>/<Cd>` or `<Prtry>`
+- **`EntryPurposeCode`**: The ISO category for the payment (e.g., `SALA` for Salary) at the Entry level.
+  - _Source:_ `<Ntry>/<Purp>/<Cd>`
+- **`EntryPurposeProprietary`**: A proprietary category for the payment at the Entry level.
+  - _Source:_ `<Ntry>/<Purp>/<Prtry>`
+- **`DomainCode`**: ISO standard classification domain code (e.g., `PMNT`) at the TxDetails level.
+  - _Source:_ `<TxDtls>/<BkTxCd>/<Domn>/<Cd>`
+- **`TransactionFamilyCode`**: ISO standard classification family code (e.g., `ICDT`) at the TxDetails level.
+  - _Source:_ `<TxDtls>/<BkTxCd>/<Domn>/<Fmly>/<Cd>`
+- **`TransactionSubFamilyCode`**: ISO standard classification sub-family code (e.g., `DMCT`) at the TxDetails level.
+  - _Source:_ `<TxDtls>/<BkTxCd>/<Domn>/<Fmly>/<SubFmlyCd>`
+- **`ProprietaryTransactionCode`**: Bank-specific internal transaction code at the TxDetails level.
   - _Source:_ `<TxDtls>/<BkTxCd>/<Prtry>/<Cd>`
-- **`ReturnReasonCode`**: The ISO reason code if the transaction bounced/reversed (e.g., `AC01`).
+- **`ReturnReasonCode`**: The ISO reason code if the transaction bounced/reversed (e.g., `AC01`) at the TxDetails level.
   - _Source:_ `<TxDtls>/<RtrInf>/<Rsn>/<Cd>` or `<Prtry>`
-- **`PurposeCode`**: The ISO category for the payment (e.g., `SALA` for Salary).
+- **`PurposeCode`**: The ISO category for the payment (e.g., `SALA` for Salary) at the TxDetails level.
   - _Source:_ `<TxDtls>/<Purp>/<Cd>`
-- **`PurposeProprietary`**: A proprietary category for the payment.
+- **`PurposeProprietary`**: A proprietary category for the payment at the TxDetails level.
   - _Source:_ `<TxDtls>/<Purp>/<Prtry>`
 
 ## Text & Remittance
