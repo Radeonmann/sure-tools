@@ -1,14 +1,13 @@
 import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, Literal
-from urllib.parse import quote_plus
+from typing import Literal
 from uuid import UUID
 
 from camt_parser import TransactionInfo
 from sure_api_client.models.post_api_v1_transactions_body import PostApiV1TransactionsBody
 from sure_api_client.models.post_api_v1_transactions_body_transaction import PostApiV1TransactionsBodyTransaction
-from sure_api_client.types import UNSET
+from sure_api_client.types import UNSET, Unset
 
 # Logger setup
 logger = logging.getLogger(__name__)
@@ -30,16 +29,22 @@ class Camt053ConverterSettings:
     If True, the batch index will be appended to the EntryAccountServicerReference to create a unique identifier for the transaction.
     If False, an error will be raised if TransactionAccountServicerReference is missing for a batch transaction.
     """
+    newly_imported_tag: str | UUID | None = "newly-imported"
+    """
+    Optional tag to assign to newly imported transactions.
+    If set as UUID, the converter will assign that tag to all newly imported transactions.
+    If set as string, the converter will attempt to look up the tag UUID from TAGS_BY_NAME and assign it to the transaction.
+    If the tag is not found, a warning will be logged and no tag will be assigned.
+    If set to None, no tag will be assigned to newly imported transactions.
+    """
 
 
 @dataclass(frozen=True)
 class Camt053ConverterLookups:
-    """Holds lookup dictionaries for accounts, categories, and tags."""
+    """Holds lookup dictionaries for accounts, categories, tags, ..."""
 
     accounts_by_iban: dict[str, UUID] = field(default_factory=dict)
     """Mapping of IBAN strings to sure.am account UUIDs. Used to look up the correct account for a transaction based on its IBAN."""
-    categories_by_name: dict[str, UUID] = field(default_factory=dict)
-    """Mapping of category names to sure.am category UUIDs. Used to look up the correct category for a transaction based on its name."""
     tags_by_name: dict[str, UUID] = field(default_factory=dict)
     """Mapping of tag names to sure.am tag UUIDs. Used to look up the correct tag for a transaction based on its name."""
 
@@ -374,6 +379,28 @@ def _extract_sure_external_id(camt_tx: TransactionInfo, context: Camt053Converte
     )
 
 
+def _extract_sure_tag_ids(camt_tx: TransactionInfo, context: Camt053ConverterContext) -> list[UUID] | Unset:
+    """
+    Extracts the tag UUIDs for a CAMT.053 transaction based on the newly_imported_tag_name setting.
+    If the setting is None, no tags will be assigned.
+    If the setting is set, the converter will attempt to look up the tag UUID from TAGS_BY_NAME and assign it to the transaction.
+    If the tag is not found, a warning will be logged and no tag will be assigned.
+    """
+    if isinstance(context.settings.newly_imported_tag, UUID):
+        return [context.settings.newly_imported_tag]
+    elif isinstance(context.settings.newly_imported_tag, str):
+        tag_uuid = context.lookups.tags_by_name.get(context.settings.newly_imported_tag)
+        if tag_uuid:
+            return [tag_uuid]
+        else:
+            logger.warning(
+                f"{_tx_log_prefix(camt_tx)}: Tag '{context.settings.newly_imported_tag}' not found in TAGS_BY_NAME mapping dictionary. No tag will be assigned."
+            )
+            return UNSET
+    else:
+        return UNSET
+
+
 def camt_transaction_to_payload(camt_tx: TransactionInfo, context: Camt053ConverterContext) -> PostApiV1TransactionsBody:
     transaction = PostApiV1TransactionsBodyTransaction(
         account_id=_extract_sure_account_uuid(camt_tx, context),
@@ -381,14 +408,14 @@ def camt_transaction_to_payload(camt_tx: TransactionInfo, context: Camt053Conver
         amount=_extract_sure_amount(camt_tx),
         name=_extract_sure_name(camt_tx, context),
         description=_extract_sure_description(camt_tx, context),
-        notes=UNSET,
-        currency=UNSET,
-        category_id=UNSET,
-        merchant_id=UNSET,
-        nature=UNSET,
+        notes=UNSET,  # keep it empty for users to fill their notes
+        currency=camt_tx.Currency,
+        category_id=UNSET,  # we want the user to categorize it manually or via AI-based categorization
+        merchant_id=UNSET,  # we want the user to categorize it manually or via AI-based categorization
+        nature=UNSET,  # we handle this by the sign of the amount
         external_id=_extract_sure_external_id(camt_tx, context),
         source=context.settings.sure_transaction_source,
-        tag_ids=UNSET,
+        tag_ids=_extract_sure_tag_ids(camt_tx, context),
     )
     return PostApiV1TransactionsBody(
         transaction=transaction,
